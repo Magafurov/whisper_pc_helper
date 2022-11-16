@@ -6,6 +6,7 @@ from typing import List, Optional, Tuple, Union, TYPE_CHECKING
 import numpy as np
 import torch
 import tqdm
+import librosa
 
 from .audio import SAMPLE_RATE, N_FRAMES, HOP_LENGTH, pad_or_trim, log_mel_spectrogram
 from .decoding import DecodingOptions, DecodingResult
@@ -81,7 +82,20 @@ def transcribe(
     if dtype == torch.float32:
         decode_options["fp16"] = False
 
-    mel = log_mel_spectrogram(audio)
+    mel_spec = torch.from_numpy(librosa.feature.melspectrogram(
+        y=audio, 
+        sr=16000, 
+        n_fft=400, 
+        hop_length=160, 
+        window='hann', 
+        center=True, 
+        power=2, 
+        n_mels=80))
+        
+        
+    log_spec = torch.clamp(mel_spec, min=1e-10).log10()
+    log_spec = torch.maximum(log_spec, log_spec.max() - 8.0)
+    mel = (log_spec + 4.0) / 4.0
 
     if decode_options.get("language", None) is None:
         if not model.is_multilingual:
