@@ -127,6 +127,9 @@ def transcribe(
                 # disable best_of when t == 0
                 kwargs.pop("best_of", None)
 
+            if kwargs.get("efficiency", None):
+                kwargs["mel_segment_length"]= int(mel.shape[1]/2)
+
             options = DecodingOptions(**kwargs, temperature=t)
             decode_result = model.decode(segment, options)
 

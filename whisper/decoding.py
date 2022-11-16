@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 from torch.distributions import Categorical
+import math
 
 from .audio import CHUNK_LENGTH
 from .tokenizer import Tokenizer, get_tokenizer
@@ -98,6 +99,11 @@ class DecodingOptions:
 
     # implementation details
     fp16: bool = True  # use fp16 for most of the calculation
+    
+    # length of segment as it arrives to encoder
+    efficiency: Optional[bool] = None
+    mel_segment_length: Optional[int] = None
+    keep_every_n_samples: Optional[int] = 1
 
 
 @dataclass(frozen=True)
@@ -450,6 +456,13 @@ class DecodingTask:
     def __init__(self, model: "Whisper", options: DecodingOptions):
         self.model = model
 
+        self.keep_every_n_samples = options.keep_every_n_samples
+
+        if model.encoder.positional_embedding.shape[1]==384:
+            self.empty_outs = torch.load(r"C:\Users\ti-ho\Documents\Programming\Git\whisper\placeholder_tiny_encoder_outs.pt")
+        elif model.encoder.positional_embedding.shape[1]==512:
+            self.empty_outs = torch.load(r"C:\Users\ti-ho\Documents\Programming\Git\whisper\placeholder_base_encoder_outs.pt")
+
         language = options.language or "en"
         tokenizer = get_tokenizer(model.is_multilingual, language=language, task=options.task)
         self.tokenizer: Tokenizer = tokenizer
@@ -458,6 +471,8 @@ class DecodingTask:
         self.n_group: int = options.beam_size or options.best_of or 1
         self.n_ctx: int = model.dims.n_text_ctx
         self.sample_len: int = options.sample_len or model.dims.n_text_ctx // 2
+
+        self.mel_segment_length = options.mel_segment_length or 3000
 
         self.sot_sequence: Tuple[int] = tokenizer.sot_sequence
         if self.options.without_timestamps:
@@ -562,7 +577,7 @@ class DecodingTask:
             # encoded audio features are given; skip audio encoding
             audio_features = mel
         else:
-            audio_features = self.model.encoder(mel)
+            audio_features = self.model.encoder(mel, self.mel_segment_length)
 
         if audio_features.dtype != (torch.float16 if self.options.fp16 else torch.float32):
             return TypeError(f"audio_features has an incorrect dtype: {audio_features.dtype}")
@@ -620,6 +635,14 @@ class DecodingTask:
 
         audio_features: Tensor = self._get_audio_features(mel)  # encoder forward pass
         tokens: Tensor = torch.tensor([self.initial_tokens]).repeat(n_audio, 1)
+
+        # filling in encoder output with template outputs in case efficiency=True
+        audio_features = torch.cat((audio_features, self.empty_outs[:,-(1500-audio_features.shape[1]):,:]), dim=1)
+        
+        # self.keep_every_n_samples of the template
+        indicies = torch.tensor(np.arange(0, 1500, self.keep_every_n_samples).tolist()[math.ceil(audio_features.shape[1] / self.keep_every_n_samples):], dtype=torch.int32)
+        selections = torch.index_select(audio_features, 1, indicies)
+        audio_features = torch.cat((audio_features[:,0:audio_features.shape[1],:], selections), dim=1)
 
         # detect language if requested, overwriting the language token
         languages, language_probs = self._detect_language(audio_features, tokens)

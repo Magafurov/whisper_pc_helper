@@ -140,7 +140,7 @@ class AudioEncoder(nn.Module):
         )
         self.ln_post = LayerNorm(n_state)
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor, mel_segment_length: int):
         """
         x : torch.Tensor, shape = (batch_size, n_mels, n_ctx)
             the mel spectrogram of the audio
@@ -148,9 +148,12 @@ class AudioEncoder(nn.Module):
         x = F.gelu(self.conv1(x))
         x = F.gelu(self.conv2(x))
         x = x.permute(0, 2, 1)
+        
+        adapted_positional_embedding =  self.positional_embedding[0:mel_segment_length+50,:]
+        x = x[:,0:mel_segment_length+50,:]
 
-        assert x.shape[1:] == self.positional_embedding.shape, "incorrect audio shape"
-        x = (x + self.positional_embedding).to(x.dtype)
+        assert x.shape[1:] == adapted_positional_embedding.shape, "incorrect audio shape"
+        x = (x + adapted_positional_embedding).to(x.dtype)
 
         for block in self.blocks:
             x = block(x)
